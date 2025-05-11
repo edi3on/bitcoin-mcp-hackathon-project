@@ -1,0 +1,1 @@
+# bitcoin-mcp-hackathon-project
