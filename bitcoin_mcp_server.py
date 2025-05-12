@@ -8,16 +8,15 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator, Dict, Any, List, Optional
 import traceback
 import os
+import base64
+from urllib.parse import urlparse
+from PIL import Image, UnidentifiedImageError
 
 from mcp.server.fastmcp import FastMCP, Context
 from bitcoin_connection import get_bitcoin_connection
 from bitcoin_wallet import get_wallet_balance
 from bitcoin_wallet import get_wallet_transactions, send_from_wallet
 from bitcoin_wallet import inscribe_ordinal
-
-import base64
-from io import BytesIO
-from PIL import Image, UnidentifiedImageError
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, 
@@ -61,32 +60,6 @@ mcp = FastMCP(
 )
 
 # Register Bitcoin Blockchain RPC tools
-@mcp.tool()
-async def get_bitfeed_3d_representation(ctx: Context, blockHeight: int, scale: float) -> str:
-    """
-    Get accurate 3D coordinates (x, y, z) and sizes (width, height, depth) of parcels from a BTC block based on Bitfeed representation. Units are in meters.
-
-    Do not modify the individuall numbers because it breaks the accuracy of the visual representation as a whole. For any sizing or scaling adjustments, use the "scale" parameter (default: 0.5 meter).
-    
-    Returns a JSON object with details about the specific Block including:
-    parcels: array of 3D representations of transactions in 3D sizes and coordinates, totalWidth: the final width of the visual representation (in meters), 
-    parcelColor: hex color code, 
-    blockNumber: the block height number,
-    totalParcels: total transactions
-    """
-    try:
-        # Import our Bitfeed implementation
-        from bitfeed import get_bitfeed_3d
-        
-        # Call the get_bitfeed_3d function with the block height parameter
-        result = await get_bitfeed_3d(blockHeight, scale)
-        
-        return json.dumps(result, indent=2)
-    except Exception as e:
-        logger.error(f"Error in get_bitfeed_3d_representation: {str(e)}")
-        logger.error(traceback.format_exc())
-        return f"Error getting Bitfeed 3D representation: {str(e)}"
-
 @mcp.tool()
 def get_blockchain_info(ctx: Context) -> str:
     """
@@ -579,34 +552,44 @@ def wallet_get_transactions(ctx: Context, limit: int = None) -> str:
         return json.dumps({"error": f"Error getting wallet transactions: {str(e)}"})
 
 @mcp.tool()
-def wallet_inscribe_ordinal(ctx: Context, data: str, fee_rate: int = 15, dry_run: bool = False) -> str:
+def wallet_inscribe_ordinal(ctx: Context, data: str, fee_rate: int = 15, dry_run: bool = False, is_image: bool = False) -> str:
     """
-    Inscribe arbitrary data as a Bitcoin ordinal.
+    Inscribe arbitrary data as a Bitcoin ordinal, with optional image validation.
     
     Parameters:
     - data: Either a URL pointing to the content, a base64-encoded data string, a file path, or plain text (which will be base64-encoded as text/plain)
     - fee_rate: Fee rate in sat/vB (default: 15)
     - dry_run: If true, don't sign or broadcast transaction (default: False)
+    - is_image: If true, validates that the input is a valid image (PNG, JPEG, GIF, WebP, or SVG) (default: False)
     
     Returns a JSON object with the inscription details and status.
     
     Notes:
     - Plain text input will be automatically encoded as a base64 data URL (e.g., data:text/plain;base64,...)
-    - For URLs, provide a direct link to the content (e.g., https://example.com/file.txt)
-    - For base64, you can include the data URL prefix (e.g., data:text/plain;base64,ABC123...) or just the base64 string
-    - For file paths, provide the full path to an existing file (e.g., /path/to/file.txt)
+    - For URLs, ensure the content is publicly accessible to avoid errors like '403 Forbidden'
+    - For file paths, provide the full path to an existing, readable file (e.g., /path/to/image.png)
+    - For base64, you can include the data URL prefix (e.g., data:image/png;base64,ABC123...) or just the base64 string
+    - If is_image is true, the input must resolve to a valid image; use this for image inscriptions
+    - If a URL fails, try using a local file path to the image or content
     - This function will create a real ordinal inscription on the blockchain. Fees will be paid from your wallet.
     """
     try:
         # Check if data is a URL, file path, or base64 data URL
         is_url = False
-        is_file = os.path.exists(data)
+        try:
+            parsed_url = urlparse(data)
+            is_url = all([parsed_url.scheme, parsed_url.netloc])
+        except:
+            is_url = False
+        is_file = os.path.exists(data) and os.access(data, os.R_OK)
         is_data_url = data.startswith("data:")
         
-        # If data is not a URL, file path, or data URL, assume it's plain text and encode it
-        if not (is_url or is_file or is_data_url):
+        # If data is a file path, ensure it's readable
+        if is_file:
+            logger.info(f"Using file path: {data}")
+        elif not (is_url or is_data_url):
+            # If data is not a URL, file path, or data URL, assume it's plain text and encode it
             try:
-                # Encode the plain text as base64 and wrap in data URL
                 base64_encoded = base64.b64encode(data.encode('utf-8')).decode('utf-8')
                 data = f"data:text/plain;base64,{base64_encoded}"
                 logger.info(f"Encoded plain text input as base64 data URL: {data}")
@@ -614,17 +597,41 @@ def wallet_inscribe_ordinal(ctx: Context, data: str, fee_rate: int = 15, dry_run
                 logger.error(f"Error encoding plain text as base64: {str(e)}")
                 return json.dumps({"error": f"Failed to encode plain text as base64: {str(e)}"})
         
+        # If is_image is True and input is a file, validate it's a valid image
+        if is_image and is_file:
+            try:
+                with Image.open(data) as img:
+                    img.verify()  # Verify it's a valid image
+                logger.info(f"Validated image file: {data}")
+            except UnidentifiedImageError as e:
+                logger.error(f"Invalid image file: {str(e)}")
+                return json.dumps({"error": f"Input is not a valid image: {str(e)}"})
+        
+        # Call inscribe_ordinal
         result = inscribe_ordinal(
             data=data,
             fee_rate=fee_rate,
             dry_run=dry_run
         )
+        
+        # If is_image is True and input was a URL or base64, validate the resulting file
+        if is_image and (is_url or is_data_url) and result.get("success"):
+            file_path = result.get("file_path")
+            if file_path and os.path.exists(file_path):
+                try:
+                    with Image.open(file_path) as img:
+                        img.verify()
+                    logger.info(f"Validated downloaded/decoded image: {file_path}")
+                except UnidentifiedImageError as e:
+                    logger.error(f"Invalid image content: {str(e)}")
+                    return json.dumps({"error": f"Input resolved to an invalid image: {str(e)}"})
+        
         return json.dumps(result, indent=2)
     except Exception as e:
         logger.error(f"Error in wallet_inscribe_ordinal: {str(e)}")
         logger.error(traceback.format_exc())
         return json.dumps({"error": f"Error inscribing ordinal: {str(e)}"})
-
+    
 # If this module is run directly, start the server
 if __name__ == "__main__":
     try:

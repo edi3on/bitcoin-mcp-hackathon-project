@@ -14,6 +14,7 @@ import uuid
 import shutil
 from urllib.parse import urlparse
 from urllib.request import urlopen
+from PIL import Image, UnidentifiedImageError
 
 # Load environment variables from .env file
 load_dotenv()
@@ -37,13 +38,26 @@ def inscribe_ordinal(data: str, fee_rate: int = 15, ord_path: str = None,
         dry_run: If true, don't sign or broadcast transaction (default: False)
         
     Returns:
-        Dict containing inscription result information
+        Dict containing inscription result information, including:
+        - success: Boolean indicating if the inscription was successful
+        - file_path: Path to the temporary file used for inscription (if applicable)
+        - inscription_data: Parsed output from ord command
+        - inscription_id: ID of the inscription (if available)
+        - raw_output: Raw output from ord command
+        - error: Error message if the inscription failed
+        Supported image formats: PNG, JPEG, GIF, WebP, SVG
+        
+    Notes:
+        - For URLs, ensure the content is publicly accessible. If access is denied (e.g., 403 Forbidden),
+          use a local file path or base64-encoded data instead.
+        - For file paths, provide the full path to an existing file (e.g., /path/to/image.png).
     """
     # Use provided values or fall back to environment variables
     ord_path = ord_path or ORD_PATH
     network = network or ORD_NETWORK
     temp_dir = None
     created_temp_dir = False
+    file_path = None
     
     try:
         # Validate network
@@ -58,7 +72,6 @@ def inscribe_ordinal(data: str, fee_rate: int = 15, ord_path: str = None,
             return {"error": "Invalid fee rate. Must be a positive integer."}
         
         # Check if data is already a file path
-        file_path = None
         if os.path.exists(data):
             file_path = data
             logger.info(f"Using provided file path: {file_path}")
@@ -107,7 +120,8 @@ def inscribe_ordinal(data: str, fee_rate: int = 15, ord_path: str = None,
                         logger.info(f"Downloaded content from URL to {file_path}")
                 except Exception as e:
                     logger.error(f"Error downloading content from URL: {str(e)}")
-                    return {"error": f"Failed to download content from URL: {str(e)}"}
+                    error_msg = f"Failed to download content from URL: {str(e)}. Try using a local file path (e.g., /path/to/image.png) or base64-encoded data."
+                    return {"error": error_msg}
             else:
                 # Assume it's a base64 encoded string
                 try:
@@ -176,7 +190,8 @@ def inscribe_ordinal(data: str, fee_rate: int = 15, ord_path: str = None,
                 "success": False,
                 "error": f"Error inscribing ordinal: {error_msg}",
                 "stderr": result.stderr,
-                "command": " ".join(command)
+                "command": " ".join(command),
+                "file_path": file_path
             }
         
         # Parse the output
@@ -212,7 +227,8 @@ def inscribe_ordinal(data: str, fee_rate: int = 15, ord_path: str = None,
             "inscribed": not dry_run,
             "dry_run": dry_run,
             "network": network,
-            "fee_rate": fee_rate
+            "fee_rate": fee_rate,
+            "file_path": file_path
         }
         
         # Add parsed data if available
@@ -228,7 +244,8 @@ def inscribe_ordinal(data: str, fee_rate: int = 15, ord_path: str = None,
         logger.error(f"Error creating ordinal inscription: {str(e)}")
         return {
             "success": False,
-            "error": f"Error creating ordinal inscription: {str(e)}"
+            "error": f"Error creating ordinal inscription: {str(e)}",
+            "file_path": file_path
         }
     finally:
         # Clean up temporary directory if we created one
