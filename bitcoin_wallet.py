@@ -11,6 +11,7 @@ from bitcoin_connection import get_bitcoin_connection
 import base64
 import tempfile
 import uuid
+import shutil
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
@@ -23,13 +24,13 @@ logger = logging.getLogger(__name__)
 ORD_PATH = os.environ.get("ORD_PATH", "ord")  # Default to 'ord' in PATH
 ORD_NETWORK = os.environ.get("ORD_NETWORK", "mainnet")  # Default to mainnet
 
-def inscribe_ordinal(image_data: str, fee_rate: int = 15, ord_path: str = None, 
+def inscribe_ordinal(data: str, fee_rate: int = 15, ord_path: str = None, 
                     network: str = None, dry_run: bool = False) -> Dict[str, Any]:
     """
-    Inscribe an image as a Bitcoin ordinal
+    Inscribe arbitrary data as a Bitcoin ordinal.
     
     Args:
-        image_data: Either a URL or base64-encoded image string
+        data: Either a URL, base64-encoded data string, or a file path to the content to inscribe
         fee_rate: Fee rate in sat/vB (default: 15)
         ord_path: Path to ord executable (defaults to ORD_PATH env var or 'ord')
         network: Network to use ('mainnet', 'testnet', 'signet') (defaults to ORD_NETWORK env var or 'mainnet')
@@ -41,169 +42,202 @@ def inscribe_ordinal(image_data: str, fee_rate: int = 15, ord_path: str = None,
     # Use provided values or fall back to environment variables
     ord_path = ord_path or ORD_PATH
     network = network or ORD_NETWORK
-    
-    # Validate network
-    valid_networks = ['mainnet', 'testnet', 'signet']
-    if network not in valid_networks:
-        logger.error(f"Invalid network: {network}")
-        return {"error": f"Invalid network. Must be one of: {', '.join(valid_networks)}"}
-    
-    # Validate fee rate
-    if not isinstance(fee_rate, int) or fee_rate < 1:
-        logger.error(f"Invalid fee rate: {fee_rate}")
-        return {"error": "Invalid fee rate. Must be a positive integer."}
+    temp_dir = None
+    created_temp_dir = False
     
     try:
-        # Create a temporary directory to store the image
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Generate a random filename
-            file_name = f"{uuid.uuid4()}"
+        # Validate network
+        valid_networks = ['mainnet', 'testnet', 'signet']
+        if network not in valid_networks:
+            logger.error(f"Invalid network: {network}")
+            return {"error": f"Invalid network. Must be one of: {', '.join(valid_networks)}"}
+        
+        # Validate fee rate
+        if not isinstance(fee_rate, int) or fee_rate < 1:
+            logger.error(f"Invalid fee rate: {fee_rate}")
+            return {"error": "Invalid fee rate. Must be a positive integer."}
+        
+        # Check if data is already a file path
+        file_path = None
+        if os.path.exists(data):
+            file_path = data
+            logger.info(f"Using provided file path: {file_path}")
+        else:
+            # Create temp directory for processing
+            temp_dir = tempfile.mkdtemp()
+            created_temp_dir = True
             
             # Determine if input is URL or base64
             is_url = False
             try:
-                # Check if it's a valid URL
-                parsed_url = urlparse(image_data)
+                parsed_url = urlparse(data)
                 is_url = all([parsed_url.scheme, parsed_url.netloc])
             except:
                 is_url = False
             
-            # Full path to save the image
-            file_path = None
-            
-            # Process based on input type
             if is_url:
-                # If URL, determine extension from content type
+                # If URL, download the content
                 try:
-                    with urlopen(image_data) as response:
+                    with urlopen(data) as response:
                         content_type = response.info().get_content_type()
                         
-                        # Map content type to extension
+                        # Map content type to extension (expanded for broader support)
                         extension_map = {
                             'image/jpeg': '.jpg',
                             'image/png': '.png',
                             'image/gif': '.gif',
                             'image/webp': '.webp',
-                            'image/svg+xml': '.svg'
+                            'image/svg+xml': '.svg',
+                            'text/plain': '.txt',
+                            'application/json': '.json',
+                            'application/pdf': '.pdf',
+                            'audio/mpeg': '.mp3',
+                            'video/mp4': '.mp4'
                         }
                         
-                        # Default to .png if content type not recognized
-                        extension = extension_map.get(content_type, '.png')
-                        file_path = os.path.join(temp_dir, file_name + extension)
+                        # Default to .bin for unknown types
+                        extension = extension_map.get(content_type, '.bin')
+                        file_name = f"{uuid.uuid4()}{extension}"
+                        file_path = os.path.join(temp_dir, file_name)
                         
-                        # Download the image
+                        # Download the content
                         with open(file_path, 'wb') as f:
                             f.write(response.read())
                         
-                        logger.info(f"Downloaded image from URL to {file_path}")
+                        logger.info(f"Downloaded content from URL to {file_path}")
                 except Exception as e:
-                    logger.error(f"Error downloading image from URL: {str(e)}")
-                    return {"error": f"Failed to download image from URL: {str(e)}"}
+                    logger.error(f"Error downloading content from URL: {str(e)}")
+                    return {"error": f"Failed to download content from URL: {str(e)}"}
             else:
-                # Assume it's base64 encoded
+                # Assume it's a base64 encoded string
                 try:
-                    # Try to determine the file type from the base64 string
-                    if "data:image/" in image_data:
-                        # Extract the type from the data URL
-                        image_type = image_data.split(';')[0].split('/')[1]
+                    # Check for data URL format
+                    base64_data = data
+                    file_extension = "bin"  # Default for unknown data
+                    
+                    if "data:" in data:
+                        # Extract MIME type from data URL
+                        mime_part = data.split(';')[0].split(':')[1]
+                        extension_map = {
+                            'image/jpeg': 'jpg',
+                            'image/png': 'png',
+                            'image/gif': 'gif',
+                            'image/webp': 'webp',
+                            'image/svg+xml': 'svg',
+                            'text/plain': 'txt',
+                            'application/json': 'json',
+                            'application/pdf': 'pdf',
+                            'audio/mpeg': 'mp3',
+                            'video/mp4': 'mp4'
+                        }
+                        file_extension = extension_map.get(mime_part, 'bin')
                         # Remove the data URL prefix
-                        image_data = image_data.split(',')[1]
-                    else:
-                        # Default to PNG if we can't determine the type
-                        image_type = "png"
+                        base64_data = data.split(',')[1]
                     
-                    # Map the type to extension
-                    extension_map = {
-                        'jpeg': '.jpg',
-                        'jpg': '.jpg',
-                        'png': '.png',
-                        'gif': '.gif',
-                        'webp': '.webp',
-                        'svg+xml': '.svg',
-                        'svg': '.svg'
-                    }
+                    # Generate file path
+                    file_name = f"{uuid.uuid4()}.{file_extension}"
+                    file_path = os.path.join(temp_dir, file_name)
                     
-                    extension = extension_map.get(image_type, '.png')
-                    file_path = os.path.join(temp_dir, file_name + extension)
-                    
-                    # Decode and save the image
-                    image_bytes = base64.b64decode(image_data)
+                    # Decode and save the data
+                    data_bytes = base64.b64decode(base64_data)
                     with open(file_path, 'wb') as f:
-                        f.write(image_bytes)
+                        f.write(data_bytes)
                     
-                    logger.info(f"Saved base64 image to {file_path}")
+                    logger.info(f"Saved base64 data to {file_path}")
                 except Exception as e:
-                    logger.error(f"Error processing base64 image: {str(e)}")
-                    return {"error": f"Failed to process base64 image: {str(e)}"}
+                    logger.error(f"Error processing base64 data: {str(e)}")
+                    return {"error": f"Failed to process base64 data: {str(e)}"}
+        
+        # Check if file exists
+        if not file_path or not os.path.exists(file_path):
+            return {"error": "Failed to obtain a valid file for inscription"}
             
-            if not file_path or not os.path.exists(file_path):
-                return {"error": "Failed to save image file"}
-            
-            # Build the command with appropriate network flag
-            command = [ord_path]
-            if network == "testnet":
-                command.append("--testnet")
-            elif network == "signet":
-                command.append("--signet")
-            
-            # Add the wallet inscribe command with parameters
-            command.extend(["wallet", "inscribe", "--fee-rate", str(fee_rate)])
-            
-            # Add dry-run if requested
-            if dry_run:
-                command.append("--dry-run")
-                
-            # Add the file path
-            command.extend(["--file", file_path])
-            
-            # Execute the command
-            logger.info(f"Executing ord command: {' '.join(command)}")
-            result = subprocess.run(command, capture_output=True, text=True)
-            
-            # Check for errors
-            if result.returncode != 0:
-                error_message = result.stderr.strip() if result.stderr else "unknown error"
-                logger.error(f"Error in ord inscribe command: {error_message}")
-                return {"error": f"Ord inscribe command failed: {error_message}", "command": ' '.join(command)}
-            
-            # Parse the output
-            output = result.stdout.strip()
-            
-            # Log the successful inscription
-            if not dry_run:
-                logger.info(f"Ordinal inscription created via ord")
-            else:
-                logger.info(f"Dry run completed for ordinal inscription")
-            
-            # Return success response
-            response = {
-                "success": True,
-                "network": network,
-                "output": output,
-                "dry_run": dry_run
+        # Build inscription command
+        command = [
+            ord_path,
+            f"--{network}",
+            "wallet",
+            "inscribe",
+            "--fee-rate", str(fee_rate),
+            "--file", file_path
+        ]
+        
+        if dry_run:
+            command.append("--dry-run")
+        
+        # Execute the command
+        result = subprocess.run(command, capture_output=True, text=True)
+        
+        # Check for errors
+        if result.returncode != 0:
+            error_msg = result.stderr.strip() if result.stderr else "Unknown error"
+            logger.error(f"Error inscribing ordinal: {error_msg}")
+            return {
+                "success": False,
+                "error": f"Error inscribing ordinal: {error_msg}",
+                "stderr": result.stderr,
+                "command": " ".join(command)
             }
-            
-            # Try to extract inscription ID if available
-            try:
-                # Pattern may vary based on ord version
-                import re
-                inscription_match = re.search(r'inscription:?\s*([a-fA-F0-9]+i\d+)', output, re.IGNORECASE)
-                if inscription_match:
-                    response["inscription_id"] = inscription_match.group(1)
+        
+        # Parse the output
+        output = result.stdout.strip()
+        
+        # Try to parse JSON response if possible
+        inscription_data = {}
+        try:
+            # Check if output contains valid JSON
+            if '{' in output and '}' in output:
+                # Extract JSON part
+                json_start = output.find('{')
+                json_end = output.rfind('}') + 1
+                json_part = output[json_start:json_end]
                 
-                # Try to extract the transaction ID
-                txid_match = re.search(r'(txid:|transaction id:)\s*([a-fA-F0-9]{64})', output, re.IGNORECASE)
-                if txid_match:
-                    response["txid"] = txid_match.group(2)
-            except Exception as e:
-                logger.warning(f"Could not extract inscription ID: {str(e)}")
-            
-            return response
+                inscription_data = json.loads(json_part)
+            else:
+                # If not JSON, parse the output lines
+                lines = output.split('\n')
+                for line in lines:
+                    if ':' in line:
+                        key, value = line.split(':', 1)
+                        inscription_data[key.strip()] = value.strip()
+        except json.JSONDecodeError:
+            # If JSON parsing fails, store raw output
+            inscription_data["raw_output"] = output
+        
+        # Return successful result
+        result = {
+            "success": True,
+            "message": "Inscription successful" if not dry_run else "Dry run successful",
+            "raw_output": output,
+            "inscribed": not dry_run,
+            "dry_run": dry_run,
+            "network": network,
+            "fee_rate": fee_rate
+        }
+        
+        # Add parsed data if available
+        if inscription_data:
+            result["inscription_data"] = inscription_data
+        
+        if "inscription" in inscription_data:
+            result["inscription_id"] = inscription_data["inscription"]
+        
+        return result
     
     except Exception as e:
-        logger.error(f"Error inscribing ordinal: {str(e)}")
-        logger.error(traceback.format_exc())
-        return {"error": f"Error inscribing ordinal: {str(e)}"}
+        logger.error(f"Error creating ordinal inscription: {str(e)}")
+        return {
+            "success": False,
+            "error": f"Error creating ordinal inscription: {str(e)}"
+        }
+    finally:
+        # Clean up temporary directory if we created one
+        if created_temp_dir and temp_dir and os.path.exists(temp_dir):
+            try:
+                shutil.rmtree(temp_dir)
+                logger.info(f"Cleaned up temporary directory: {temp_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up temporary directory {temp_dir}: {str(e)}")
 
 def get_wallet_balance(ord_path: str = None, network: str = None) -> Dict[str, Any]:
     """
@@ -276,7 +310,7 @@ def get_wallet_balance(ord_path: str = None, network: str = None) -> Dict[str, A
                 response["parsed"]["cardinal_balance_sats"] = float(cardinal_match.group(1))
                 
             if ordinal_match:
-                response["parsed"]["ordinal_balance_sats"] = float(ordinal_match.group(1))
+                response["parsed"]["ordinal_balance_sats"] = float(cardinal_match.group(1))
             
             # Convert to BTC for convenience
             if "total_balance_sats" in response["parsed"]:

@@ -10,12 +10,14 @@ import traceback
 import os
 
 from mcp.server.fastmcp import FastMCP, Context
-
-# Import our modules
 from bitcoin_connection import get_bitcoin_connection
 from bitcoin_wallet import get_wallet_balance
 from bitcoin_wallet import get_wallet_transactions, send_from_wallet
 from bitcoin_wallet import inscribe_ordinal
+
+import base64
+from io import BytesIO
+from PIL import Image, UnidentifiedImageError
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, 
@@ -523,6 +525,7 @@ def get_wallet_balance_tool(ctx: Context) -> str:
     A JSON object with wallet balance information including the total balance in satoshis.
     """
     try:
+        logger.info("hello world")
         result = get_wallet_balance()
         return json.dumps(result, indent=2)
     except Exception as e:
@@ -576,25 +579,43 @@ def wallet_get_transactions(ctx: Context, limit: int = None) -> str:
         return json.dumps({"error": f"Error getting wallet transactions: {str(e)}"})
 
 @mcp.tool()
-def wallet_inscribe_ordinal(ctx: Context, image_data: str, fee_rate: int = 15, dry_run: bool = False) -> str:
+def wallet_inscribe_ordinal(ctx: Context, data: str, fee_rate: int = 15, dry_run: bool = False) -> str:
     """
-    Inscribe an image as a Bitcoin ordinal.
+    Inscribe arbitrary data as a Bitcoin ordinal.
     
     Parameters:
-    - image_data: Either a URL pointing to an image or a base64-encoded image string
+    - data: Either a URL pointing to the content, a base64-encoded data string, a file path, or plain text (which will be base64-encoded as text/plain)
     - fee_rate: Fee rate in sat/vB (default: 15)
     - dry_run: If true, don't sign or broadcast transaction (default: False)
     
     Returns a JSON object with the inscription details and status.
     
     Notes:
-    - For URLs, provide a direct link to the image (e.g., https://example.com/image.png)
-    - For base64, you can include the data URL prefix (e.g., data:image/png;base64,ABC123...) or just the base64 string
+    - Plain text input will be automatically encoded as a base64 data URL (e.g., data:text/plain;base64,...)
+    - For URLs, provide a direct link to the content (e.g., https://example.com/file.txt)
+    - For base64, you can include the data URL prefix (e.g., data:text/plain;base64,ABC123...) or just the base64 string
+    - For file paths, provide the full path to an existing file (e.g., /path/to/file.txt)
     - This function will create a real ordinal inscription on the blockchain. Fees will be paid from your wallet.
     """
     try:
+        # Check if data is a URL, file path, or base64 data URL
+        is_url = False
+        is_file = os.path.exists(data)
+        is_data_url = data.startswith("data:")
+        
+        # If data is not a URL, file path, or data URL, assume it's plain text and encode it
+        if not (is_url or is_file or is_data_url):
+            try:
+                # Encode the plain text as base64 and wrap in data URL
+                base64_encoded = base64.b64encode(data.encode('utf-8')).decode('utf-8')
+                data = f"data:text/plain;base64,{base64_encoded}"
+                logger.info(f"Encoded plain text input as base64 data URL: {data}")
+            except Exception as e:
+                logger.error(f"Error encoding plain text as base64: {str(e)}")
+                return json.dumps({"error": f"Failed to encode plain text as base64: {str(e)}"})
+        
         result = inscribe_ordinal(
-            image_data=image_data,
+            data=data,
             fee_rate=fee_rate,
             dry_run=dry_run
         )
@@ -603,7 +624,6 @@ def wallet_inscribe_ordinal(ctx: Context, image_data: str, fee_rate: int = 15, d
         logger.error(f"Error in wallet_inscribe_ordinal: {str(e)}")
         logger.error(traceback.format_exc())
         return json.dumps({"error": f"Error inscribing ordinal: {str(e)}"})
-
 
 # If this module is run directly, start the server
 if __name__ == "__main__":
