@@ -2,3 +2,4 @@ fastmcp>=0.1.0
 asyncio>=3.4.3
 configparser>=5.0.0
 python-dotenv
+Pillow>=10.0.0
