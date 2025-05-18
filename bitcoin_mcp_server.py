@@ -506,28 +506,37 @@ def get_wallet_balance_tool(ctx: Context) -> str:
         return f"Error getting wallet balance: {str(e)}"
 
 @mcp.tool()
-def wallet_send_bitcoin(ctx: Context, address: str, amount_sats: int, fee_rate: int = 1, dry_run: bool = False) -> str:
+def wallet_send_bitcoin(ctx: Context, address: str, amount_sats: int, fee_rate: int = 1, confirm: bool = False) -> str:
     """
-    Send Bitcoin from your wallet to a specified address.
-    
-    Parameters:
-    - address: The Bitcoin address to send to (must be a valid Bitcoin address)
-    - amount_sats: Amount to send in satoshis (integer)
-    - fee_rate: Fee rate in sat/vB (default: 1)
-    - dry_run: If true, don't sign or broadcast transaction (default: False)
-    
-    Returns a JSON object with the transaction details and status.
-    
-    Note: This function will send real Bitcoin from your wallet. Make sure the address is correct.
+    Send Bitcoin from your wallet to a specified address, with fee confirmation.
+    If confirm is False, does a dry run and returns the fee estimate and a prompt for confirmation.
+    If confirm is True, sends the transaction for real.
     """
     try:
-        result = send_from_wallet(
-            address=address,
-            amount_sats=amount_sats,
-            fee_rate=fee_rate,
-            dry_run=dry_run
-        )
-        return json.dumps(result, indent=2)
+        if not confirm:
+            # Dry run for fee estimate
+            result = send_from_wallet(
+                address=address,
+                amount_sats=amount_sats,
+                fee_rate=fee_rate,
+                dry_run=True
+            )
+            # Extract fee info from result['output'] or result['raw_output']
+            fee_info = result.get("output", "")
+            return json.dumps({
+                "confirmation_required": True,
+                "fee_estimate": fee_info,
+                "message": "This transaction will cost the above fee. Call this tool again with confirm=True to proceed."
+            }, indent=2)
+        else:
+            # Real transaction
+            result = send_from_wallet(
+                address=address,
+                amount_sats=amount_sats,
+                fee_rate=fee_rate,
+                dry_run=False
+            )
+            return json.dumps(result, indent=2)
     except Exception as e:
         logger.error(f"Error in wallet_send_bitcoin: {str(e)}")
         logger.error(traceback.format_exc())
@@ -552,27 +561,32 @@ def wallet_get_transactions(ctx: Context, limit: int = None) -> str:
         return json.dumps({"error": f"Error getting wallet transactions: {str(e)}"})
 
 @mcp.tool()
-def wallet_inscribe_ordinal(ctx: Context, data: str, fee_rate: int = 15, dry_run: bool = False, is_image: bool = False) -> str:
+def wallet_inscribe_ordinal(
+    ctx: Context,
+    data: str,
+    fee_rate: int = 15,
+    confirm: bool = False,
+    is_image: bool = False,
+    dry_run: bool = None
+) -> str:
     """
-    Inscribe arbitrary data as a Bitcoin ordinal, with optional image validation.
-    
+    Inscribe arbitrary data as a Bitcoin ordinal, with optional image validation and fee confirmation.
+
     Parameters:
     - data: Either a URL pointing to the content, a base64-encoded data string, a file path, or plain text (which will be base64-encoded as text/plain)
     - fee_rate: Fee rate in sat/vB (default: 15)
-    - dry_run: If true, don't sign or broadcast transaction (default: False)
+    - confirm: If False, does a dry run and returns the fee estimate and a prompt for confirmation. If True, inscribes for real.
     - is_image: If true, validates that the input is a valid image (PNG, JPEG, GIF, WebP, or SVG) (default: False)
-    
+
     Returns a JSON object with the inscription details and status.
-    
-    Notes:
-    - Plain text input will be automatically encoded as a base64 data URL (e.g., data:text/plain;base64,...)
-    - For URLs, ensure the content is publicly accessible to avoid errors like '403 Forbidden'
-    - For file paths, provide the full path to an existing, readable file (e.g., /path/to/image.png)
-    - For base64, you can include the data URL prefix (e.g., data:image/png;base64,ABC123...) or just the base64 string
-    - If is_image is true, the input must resolve to a valid image; use this for image inscriptions
-    - If a URL fails, try using a local file path to the image or content
-    - This function will create a real ordinal inscription on the blockchain. Fees will be paid from your wallet.
     """
+    import os
+    import base64
+    from urllib.parse import urlparse
+    from PIL import Image, UnidentifiedImageError
+    import json
+    import traceback
+
     try:
         # Check if data is a URL, file path, or base64 data URL
         is_url = False
@@ -583,7 +597,7 @@ def wallet_inscribe_ordinal(ctx: Context, data: str, fee_rate: int = 15, dry_run
             is_url = False
         is_file = os.path.exists(data) and os.access(data, os.R_OK)
         is_data_url = data.startswith("data:")
-        
+
         # If data is a file path, ensure it's readable
         if is_file:
             logger.info(f"Using file path: {data}")
@@ -596,7 +610,7 @@ def wallet_inscribe_ordinal(ctx: Context, data: str, fee_rate: int = 15, dry_run
             except Exception as e:
                 logger.error(f"Error encoding plain text as base64: {str(e)}")
                 return json.dumps({"error": f"Failed to encode plain text as base64: {str(e)}"})
-        
+
         # If is_image is True and input is a file, validate it's a valid image
         if is_image and is_file:
             try:
@@ -606,14 +620,28 @@ def wallet_inscribe_ordinal(ctx: Context, data: str, fee_rate: int = 15, dry_run
             except UnidentifiedImageError as e:
                 logger.error(f"Invalid image file: {str(e)}")
                 return json.dumps({"error": f"Input is not a valid image: {str(e)}"})
-        
+
+        # Determine dry_run logic based on confirm parameter
+        if dry_run is None:
+            dry_run = not confirm
+
         # Call inscribe_ordinal
         result = inscribe_ordinal(
             data=data,
             fee_rate=fee_rate,
             dry_run=dry_run
         )
-        
+
+        # If this is a dry run, prompt for confirmation and show fee estimate
+        if not confirm:
+            fee_info = result.get("output", result.get("fee_estimate", ""))
+            return json.dumps({
+                "confirmation_required": True,
+                "fee_estimate": fee_info,
+                "message": "This inscription will cost the above fee. Call this tool again with confirm=True to proceed.",
+                "dry_run_result": result
+            }, indent=2)
+
         # If is_image is True and input was a URL or base64, validate the resulting file
         if is_image and (is_url or is_data_url) and result.get("success"):
             file_path = result.get("file_path")
@@ -625,13 +653,133 @@ def wallet_inscribe_ordinal(ctx: Context, data: str, fee_rate: int = 15, dry_run
                 except UnidentifiedImageError as e:
                     logger.error(f"Invalid image content: {str(e)}")
                     return json.dumps({"error": f"Input resolved to an invalid image: {str(e)}"})
-        
+
         return json.dumps(result, indent=2)
     except Exception as e:
         logger.error(f"Error in wallet_inscribe_ordinal: {str(e)}")
         logger.error(traceback.format_exc())
         return json.dumps({"error": f"Error inscribing ordinal: {str(e)}"})
-    
+
+@mcp.tool()
+def save_image_to_uploads(ctx: Context, data: str, filename: str = None) -> str:
+    """
+    Save an image provided by the user (file path, URL, or base64 data URL) into the 'uploads' folder.
+    Returns the full file path of the saved image.
+
+    Parameters:
+    - data: Path to the image file, a URL, or a base64 data URL.
+    - filename: Optional filename for the saved image (default: uses timestamp).
+
+    Returns:
+    - The full file path of the saved image, or an error message.
+    """
+    import os
+    import base64
+    import requests
+    from io import BytesIO
+    from PIL import Image, UnidentifiedImageError
+    import time
+
+    uploads_dir = os.path.join(os.path.dirname(__file__), "uploads")
+    os.makedirs(uploads_dir, exist_ok=True)
+
+    # Generate filename if not provided
+    if not filename:
+        filename = f"image_{int(time.time())}.jpg"
+    save_path = os.path.join(uploads_dir, filename)
+
+    try:
+        # If data is a local file path
+        if os.path.exists(data) and os.access(data, os.R_OK):
+            with Image.open(data) as img:
+                img = img.convert("RGB")
+                img.save(save_path, format="JPEG")
+            return save_path
+
+        # If data is a base64 data URL
+        elif data.startswith("data:image"):
+            header, b64data = data.split(",", 1)
+            img_bytes = base64.b64decode(b64data)
+            with Image.open(BytesIO(img_bytes)) as img:
+                img = img.convert("RGB")
+                img.save(save_path, format="JPEG")
+            return save_path
+
+        # If data is a URL
+        elif data.startswith("http://") or data.startswith("https://"):
+            headers = {
+                "User-Agent": "Mozilla/5.0"
+            }
+            resp = requests.get(data, headers=headers, allow_redirects=True, timeout=10)
+            if resp.status_code != 200:
+                return f"Error: Could not fetch image from URL ({resp.status_code})"
+            # Check content-type
+            content_type = resp.headers.get("Content-Type", "")
+            if not content_type.startswith("image/"):
+                # Try to extract image from HTML if possible (not guaranteed)
+                return "Error: URL did not return an image file (Content-Type: {}).".format(content_type)
+            try:
+                with Image.open(BytesIO(resp.content)) as img:
+                    img = img.convert("RGB")
+                    img.save(save_path, format="JPEG")
+                return save_path
+            except UnidentifiedImageError:
+                # Log first 200 bytes for debugging
+                snippet = resp.content[:200]
+                return f"Error: Could not identify image file. First 200 bytes: {snippet!r}"
+
+        else:
+            return "Error: Unsupported input format. Provide a file path, image URL, or base64 data URL."
+    except Exception as e:
+        return f"Error saving image: {str(e)}"
+
+@mcp.tool()
+def compress_image_to_1k(ctx: Context, file_path: str, output_path: str = None) -> str:
+    """
+    Compress and resize a local image file so the resulting JPEG is under 1KB.
+    Saves the compressed image and returns the new file path or an error message.
+
+    Parameters:
+    - file_path: Path to the original image file.
+    - output_path: Optional path for the compressed image (default: adds '_compressed.jpg' to the original filename).
+
+    Returns:
+    - The file path of the compressed image, or an error message.
+    """
+    import os
+    from io import BytesIO
+    from PIL import Image
+
+    max_bytes = 1024
+
+    if not os.path.exists(file_path) or not os.access(file_path, os.R_OK):
+        return f"Error: File '{file_path}' does not exist or is not readable"
+
+    if output_path is None:
+        base, ext = os.path.splitext(file_path)
+        output_path = f"{base}_compressed.jpg"
+
+    try:
+        with Image.open(file_path) as img:
+            img = img.convert("RGB")
+            min_dim = 16
+            max_dim = min(img.width, img.height)
+            for dim in range(max_dim, min_dim - 1, -8):
+                resized = img.resize((dim, dim), Image.LANCZOS)
+                for quality in range(40, 10, -5):
+                    buffer = BytesIO()
+                    resized.save(buffer, format="JPEG", quality=quality, optimize=True)
+                    size = buffer.tell()
+                    if size <= max_bytes:
+                        # Save to output_path
+                        buffer.seek(0)
+                        with open(output_path, "wb") as f:
+                            f.write(buffer.read())
+                        return output_path
+            return "Error: Could not compress image below 1KB"
+    except Exception as e:
+        return f"Error compressing image: {str(e)}"
+
 # If this module is run directly, start the server
 if __name__ == "__main__":
     try:
