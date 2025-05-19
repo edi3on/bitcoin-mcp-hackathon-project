@@ -70,76 +70,7 @@ def get_transaction(txid: str, verbose: bool = True, blockhash: str = None) -> D
         
     return bitcoin.run_command(command)
 
-def decode_transaction(hex_data: str) -> Dict[str, Any]:
-    """
-    Decode a raw transaction hex string
-    
-    Args:
-        hex_data: Transaction hex data
-        
-    Returns:
-        Decoded transaction data
-    """
-    bitcoin = get_bitcoin_connection()
-    return bitcoin.run_command(["decoderawtransaction", hex_data])
 
-def get_mempool_transactions(verbose: bool = False) -> Dict[str, Any]:
-    """
-    Get all transactions in the mempool
-    
-    Args:
-        verbose: If True, return detailed information, otherwise just TXIDs
-        
-    Returns:
-        Mempool transactions
-    """
-    bitcoin = get_bitcoin_connection()
-    command = ["getrawmempool"]
-    if verbose:
-        command.append("true")
-        
-    return bitcoin.run_command(command)
-
-def get_mempool_ancestor_info(txid: str) -> Dict[str, Any]:
-    """
-    Get mempool ancestors for a transaction
-    
-    Args:
-        txid: Transaction ID
-        
-    Returns:
-        Ancestor transaction info
-    """
-    bitcoin = get_bitcoin_connection()
-    return bitcoin.run_command(["getmempoolancestors", txid, "true"])
-
-def get_mempool_descendant_info(txid: str) -> Dict[str, Any]:
-    """
-    Get mempool descendants for a transaction
-    
-    Args:
-        txid: Transaction ID
-        
-    Returns:
-        Descendant transaction info
-    """
-    bitcoin = get_bitcoin_connection()
-    return bitcoin.run_command(["getmempooldescendants", txid, "true"])
-
-def get_mempool_entry_info(txid: str) -> Dict[str, Any]:
-    """
-    Get mempool entry for a transaction
-    
-    Args:
-        txid: Transaction ID
-        
-    Returns:
-        Mempool entry info
-    """
-    bitcoin = get_bitcoin_connection()
-    return bitcoin.run_command(["getmempoolentry", txid])
-
-def analyze_transaction(txid: str) -> str:
     """
     Analyze a transaction with detailed information
     
