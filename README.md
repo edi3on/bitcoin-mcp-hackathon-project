@@ -4,9 +4,9 @@ Bitcoin MCP is a Model Context Protocol (MCP) server that integrates with Bitcoi
 
 ## Features
 
-- Query real-time Bitcoin blockchain data, including blocks, transactions, and mempool
-- Perform wallet operations like checking balances, sending Bitcoin, and inscribing ordinals
-- Analyze blockchain metrics such as difficulty, transaction fees, and hashrate
+- Query real-time Bitcoin blockchain data, including blocks and network info
+- Perform wallet operations like checking balances, sending Bitcoin, and inscribing ordinals (including images)
+- Estimate transaction fees before sending or inscribing
 - Support for mainnet, testnet, and signet networks
 - Secure and efficient integration with Bitcoin Core via `bitcoin-cli` and `ord` for ordinal inscriptions
 
@@ -64,7 +64,7 @@ Bitcoin MCP is a Model Context Protocol (MCP) server that integrates with Bitcoi
      ```
    - Replace `path/to/bitcoin-mcp` with the absolute path to your project directory.
 
-5. Test the server:
+5. **Test the server**:
    ```bash
    python bitcoin_mcp_server.py
    ```
@@ -72,63 +72,38 @@ Bitcoin MCP is a Model Context Protocol (MCP) server that integrates with Bitcoi
 
 ## Available Tools
 
-The Bitcoin MCP server exposes a comprehensive set of tools for blockchain queries, wallet operations, and analytics, accessible through MCP clients like Claude Desktop.
+The Bitcoin MCP server exposes a focused set of tools for blockchain queries, wallet operations, and ordinal inscriptions, accessible through MCP clients like Claude Desktop.
 
 ### Blockchain Information
 
-| Tool | Description |
-|------|-------------|
-| `get_blockchain_info` | Retrieve the current state of the blockchain |
-| `get_block_hash` | Get the hash for a specific block height |
-| `get_block` | Fetch block data by hash with customizable verbosity |
-| `get_block_stats` | Obtain computed statistics for a block |
-| `get_chain_tips` | Get details about all known chain tips |
-| `get_chain_tx_stats` | Retrieve transaction volume statistics |
-| `get_difficulty` | Get the current network difficulty |
-| `get_network_info` | Fetch network connection and settings details |
-| `get_blockchain_status` | Get a comprehensive blockchain status report |
-| `get_detailed_block_info` | Retrieve detailed information about a specific block |
-| `search_blocks` | Search for blocks based on criteria like height or size |
-
-### Transaction Information
-
-| Tool | Description |
-|------|-------------|
-| `get_mempool_info` | Get details about the transaction memory pool |
-| `get_tx_out` | Retrieve information about an unspent transaction output (UTXO) |
-| `get_tx_out_set_info` | Get statistics about the UTXO set |
-| `get_raw_transaction` | Fetch raw transaction data |
-| `decode_raw_transaction` | Decode a raw transaction hex string |
-| `estimate_smart_fee` | Estimate fee rates for transaction confirmation |
-| `analyze_transaction` | Perform detailed analysis of a transaction |
+| Tool                   | Description                                         |
+|------------------------|-----------------------------------------------------|
+| `get_blockchain_info`  | Retrieve the current state of the blockchain        |
+| `get_block_hash`       | Get the hash for a specific block height            |
+| `get_block`            | Fetch block data by hash with customizable verbosity|
+| `estimate_smart_fee`   | Estimate fee rates for transaction confirmation     |
+| `get_network_info`     | Fetch network connection and settings details       |
 
 ### Wallet Operations
 
-| Tool | Description |
-|------|-------------|
-| `get_wallet_balance_tool` | Get the wallet's balance in satoshis |
-| `wallet_send_bitcoin` | Send Bitcoin to a specified address |
-| `wallet_get_transactions` | Retrieve the wallet's transaction history |
-| `wallet_inscribe_ordinal` | Inscribe data (text, images, etc.) as a Bitcoin ordinal |
+| Tool                     | Description                                      |
+|--------------------------|--------------------------------------------------|
+| `get_wallet_balance_tool`| Get the wallet's balance in satoshis             |
+| `wallet_send_bitcoin`    | Send Bitcoin to a specified address (with fee confirmation prompt) |
+| `wallet_get_transactions`| Retrieve the wallet's transaction history        |
+| `wallet_inscribe_ordinal`| Inscribe data (text, images, etc.) as a Bitcoin ordinal (with fee confirmation prompt) |
+| `save_image_to_uploads`  | Save an image to the uploads folder for inscription|
+| `compress_image_to_1k`   | Compress an image to under 1KB for inscription   |
 
-### Analytics
-
-| Tool | Description |
-|------|-------------|
-| `get_difficulty_history` | Retrieve historical difficulty adjustments |
-| `get_fee_history` | Analyze transaction fee trends over recent blocks |
-| `get_hashrate_estimate` | Estimate the network's hashrate |
-| `get_block_time_distribution` | Analyze the distribution of time between blocks |
-| `analyze_blockchain` | Perform a comprehensive analysis of blockchain metrics |
+> **Note:**  
+> For sending Bitcoin and inscribing ordinals, the server will always perform a dry run first and prompt you with the estimated fee. You must confirm the operation to actually broadcast the transaction or inscription.
 
 ## Code Structure
 
 - `bitcoin_mcp_server.py`: Main entry point defining the MCP server and its tools
 - `bitcoin_connection.py`: Utilities for establishing and managing connections to Bitcoin Core
 - `bitcoin_wallet.py`: Functions for wallet interactions, including sending Bitcoin and inscribing ordinals
-- `bitcoin_transactions.py`: Utilities for transaction data retrieval and analysis
 - `bitcoin_utils.py`: General-purpose blockchain data utilities
-- `bitcoin_analytics.py`: Advanced analytics for blockchain metrics and trends
 
 ## Security Notes
 
@@ -152,14 +127,9 @@ What's the current state of the Bitcoin blockchain?
 Show me details about block 850000
 ```
 
-**Analyze transaction fees**:
+**Estimate transaction fee**:
 ```
-How have transaction fees trended over the last 10 blocks?
-```
-
-**Estimate hashrate**:
-```
-What's the estimated Bitcoin network hashrate based on the last 144 blocks?
+Estimate the fee to send a transaction with confirmation in 2 blocks.
 ```
 
 **Check wallet balance**:
@@ -171,8 +141,17 @@ What's my Bitcoin wallet balance?
 ```
 Send 50000 satoshis to bc1qexampleaddress with a fee rate of 1 sat/vB
 ```
+*You will be prompted with a fee estimate before confirming the transaction.*
 
 **Inscribe an ordinal**:
 ```
 Inscribe "My first ordinal" as a Bitcoin ordinal with a fee rate of 10 sat/vB
 ```
+*You will be prompted with a fee estimate before confirming the inscription.*
+
+**Inscribe an image as an ordinal**:
+```
+Inscribe the image at https://example.com/image.png as a Bitcoin ordinal.
+```
+
+---
